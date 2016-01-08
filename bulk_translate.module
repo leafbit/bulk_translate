@@ -1,0 +1,134 @@
+<?php
+/**
+ * @file: Translates simultaniously occurances of the same string for different
+ * context.
+*/
+
+/**
+ * Invoke hook_form_alter().
+ */
+function bulk_translate_form_i18n_string_locale_translate_edit_form_alter(&$form, &$form_state, $form_id) {
+  $form['#submit'][]='bulk_translate_all_similar';
+  $form['bulk_translate_all'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Translate all occurences'),
+    '#description' => t('If checked - all untranslated occurences of source string will be translated regardles of context they are found in.'),
+    '#default_value' => variable_get('bulk_translate_all_default', FALSE),
+  );
+}
+
+/**
+ * Function bulk_translate_all_similar().
+ */
+function bulk_translate_all_similar($form, $form_state) {
+  $v  = $form_state['values'];
+  if (!$v['bulk_translate_all']) {
+    variable_set('bulk_translate_all_default', FALSE);
+    return;
+  }
+
+  $query = db_select('locales_source', 't')
+    ->fields('t', array('source'))
+    ->condition('lid', $v['lid']);
+  $qh = $query->execute();
+  if (!$qh) return;
+
+  $src = $qh->fetchObject();
+  if (!$src) return;
+
+  // Load all similar sources:
+  $query = db_select('locales_source', 't')
+    ->fields('t', array('lid'))
+    ->condition('source', $src->source);
+  $qh = $query->execute();
+
+  $lids = array();
+
+  if ($qh) {
+    $lids = $qh->fetchCol();
+  }
+  variable_set('bulk_translate_all_default', TRUE);
+  foreach($form_state['values']['translations'] as $l => $tr) {
+    if (!trim($tr)) continue;
+
+    // Load all similar sources:
+    $query = db_select('locales_target', 't')
+      ->fields('t', array('lid'))
+      ->condition('language', $l)
+      ->condition('lid', $lids, 'IN');
+    $qh = $query->execute();
+
+    $tlids = array();
+
+    if ($qh) {
+      $tlids = $qh->fetchCol();
+    }
+
+    $adiff = array_diff($lids, $tlids);
+    if (!$adiff) continue;
+
+    db_query("INSERT INTO `locales_target` (lid, translation, language, plid, plural, i18n_status)
+      SELECT s.lid, :translation, :lng, 0, 0, 0
+      FROM `locales_source` s
+      WHERE s.lid IN (:lids)", array(
+        ':translation' => $tr,
+        ':lng' => $l,
+        ':lids' => $adiff,
+      ));
+  }
+}
+
+/**
+  * Function bulk_translate_all().
+  * @$source - source string (usually english)
+  * @$translations - array with keys representing language code and values
+  * representing translated strings
+ */
+function bulk_translate_all($source, $translations) {
+
+  // Load IDs of all string sources that match given string:
+  $query = db_select('locales_source', 't')
+    ->fields('t', array('lid'))
+    ->condition('source', $source);
+  $qh = $query->execute();
+
+  $lids = array();
+
+  if ($qh) {
+    $lids = $qh->fetchCol();
+  }
+
+  // If no ids found in database for the given string - do nothing.
+  if (!$lids || !$translations) {
+    return FALSE;
+  }
+
+  foreach($translations as $l => $tr) {
+    if (!trim($tr)) continue;
+
+    // Load all translations that already exists
+    $query = db_select('locales_target', 't')
+      ->fields('t', array('lid'))
+      ->condition('language', $l)
+      ->condition('lid', $lids, 'IN');
+    $qh = $query->execute();
+
+    // Populate a buffer for translated language string IDs
+    $tlids = array();
+    if ($qh) {
+      $tlids = $qh->fetchCol();
+    }
+
+    $adiff = array_diff($lids, $tlids);
+    if (!$adiff) continue;
+
+    db_query("INSERT INTO `locales_target` (lid, translation, language, plid, plural, i18n_status)
+      SELECT s.lid, :translation, :lng, 0, 0, 0
+      FROM `locales_source` s
+      WHERE s.lid IN (:lids)", array(
+        ':translation' => $tr,
+        ':lng' => $l,
+        ':lids' => $adiff,
+      ));
+  }
+}

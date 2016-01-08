@@ -1,0 +1,4 @@
+name = Bulk Translate
+description = Translates simultaniously occurances of the same string for different context
+core = 7.x
+package = Leafbit
